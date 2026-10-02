@@ -1,8 +1,9 @@
+from langchain.messages import HumanMessage
 import rich_click as click
 from rich.console import Console
 from rich.panel import Panel
 
-from forgeai.agent.llm import llm_client
+from forgeai.agent.graph import agent_graph
 
 console = Console()
 
@@ -35,9 +36,15 @@ def chat():
             break
 
         try:
-            response = llm_client.generate_response(user_input)
+            result = agent_graph.invoke(
+                {"messages": [HumanMessage(content=user_input)]}
+            )
 
-            console.print(f"\n[bold green]ForgeAI:\n{response}")
+            response = result["messages"][-1]
+
+            console.print(
+                f"\n[bold green]ForgeAI:[/bold green]\n" f"{response.content}"
+            )
 
         except Exception as error:
-            console.print(f"\n[bold red]Error: {error}[/bold red]")
+            console.print(f"[bold red]Error:[/bold red] {error}")
