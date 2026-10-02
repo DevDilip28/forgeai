@@ -41,7 +41,8 @@ env/
 *.db
 *.sqlite
 *.sqlite3
-nexus_checkpoints.db
+.forgeai/db/
+
 
 # Logs
 *.log

@@ -1,76 +1,213 @@
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Annotated
 
+import pathspec
 from langchain_core.tools import tool
 
-PROJECT_ROOT = Path.cwd().resolve()
+
+def _get_gitignore_spec(
+    dir_path: Path,
+) -> tuple[Path, pathspec.PathSpec | None]:
+    root_path = dir_path
+
+    while root_path.parent != root_path:
+        if (root_path / ".git").exists() or (root_path / ".gitignore").exists():
+            break
+        root_path = root_path.parent
+
+    gitignore_path = root_path / ".gitignore"
+
+    if gitignore_path.exists():
+        with gitignore_path.open("r", encoding="utf-8") as file:
+            spec = pathspec.PathSpec.from_lines(
+                "gitwildmatch",
+                file.read().splitlines(),
+            )
+        return root_path, spec
+
+    return root_path, None
 
 
-def safe_path(path: str) -> Path:
-    """Resolve a path and ensure it stays inside the project."""
+def _is_ignored(
+    path: Path,
+    root_path: Path,
+    spec: pathspec.PathSpec | None,
+) -> bool:
+    if ".git" in path.parts:
+        return True
 
-    target = (PROJECT_ROOT / path).resolve()
+    if spec:
+        try:
+            relative_path = path.relative_to(root_path)
+            relative_string = relative_path.as_posix()
 
-    if not target.is_relative_to(PROJECT_ROOT):
-        raise ValueError(f"Path {path} is outside the project directory.")
-    return target
+            if path.is_dir():
+                relative_string = f"{relative_string}/"
+
+            return spec.match_file(relative_string)
+        except ValueError:
+            return False
+
+    return False
+
+
+def _collect_items(
+    all_paths: Iterable[Path],
+    dir_path: Path,
+    root_path: Path,
+    spec: pathspec.PathSpec | None,
+) -> list[str]:
+    items = []
+
+    for path in all_paths:
+        if _is_ignored(path, root_path, spec):
+            continue
+
+        relative_path = path.relative_to(dir_path)
+        relative_string = relative_path.as_posix()
+
+        if path.is_dir():
+            items.append(f"{relative_string}/")
+        else:
+            items.append(relative_string)
+
+    return items
+
+
+def _format_listing(items: list[str]) -> str:
+    if not items:
+        return "Directory is empty (or all files are ignored)"
+
+    items.sort()
+
+    max_items = 500
+    max_chars = 32768
+
+    result_items = items[:max_items]
+    result = "\n".join(result_items)
+
+    if len(items) > max_items or len(result) > max_chars:
+        if len(result) > max_chars:
+            result = result[:max_chars] + "... (truncated due to length)"
+
+        summary = []
+
+        if len(items) > max_items:
+            summary.append(f"{len(items) - max_items} more items")
+
+        return (
+            f"{result}\n\n"
+            f"... and {', '.join(summary)} "
+            f"(output capped to prevent context overflow)"
+        )
+
+    return result
 
 
 @tool
-def read_file(path: str) -> str:
-    """Read and return the content of a file."""
+def read_file(
+    path: Annotated[str, "Path to the file to read"],
+    start_line: Annotated[int | None, "Starting line number (1-indexed)"] = None,
+    end_line: Annotated[int | None, "Ending line number (inclusive)"] = None,
+) -> str:
+    """Read the contents of a file, optionally within a specific line range."""
+    try:
+        file_path = Path(path)
 
-    file_path = safe_path(path)
+        if not file_path.exists():
+            return f"Error: File '{path}' does not exist"
 
-    if not file_path.exists():
-        raise FileNotFoundError(f"File {file_path} does not exist.")
+        if not file_path.is_file():
+            return f"Error: '{path}' is not a file"
 
-    if not file_path.is_file():
-        raise ValueError(f"Path {file_path} is not a file.")
+        with file_path.open("r", encoding="utf-8") as file:
+            if start_line is None and end_line is None:
+                return file.read()
 
-    return file_path.read_text(encoding="utf-8")
+            lines = file.readlines()
+            start = (start_line - 1) if start_line else 0
+            end = end_line if end_line else len(lines)
+
+            return "".join(lines[start:end])
+
+    except Exception as error:
+        return f"Error reading file: {error!s}"
 
 
 @tool
-def write_file(path: str, content: str) -> str:
-    """Create or overwrite a file with the given content."""
+def write_file(
+    path: Annotated[str, "Path to the file to write"],
+    content: Annotated[str, "Content to write to the file"],
+    *,
+    create_dirs: Annotated[
+        bool,
+        "Create parent directories if they don't exist",
+    ] = True,
+) -> str:
+    """Write content to a file and optionally create missing parent directories."""
 
-    file_path = safe_path(path)
+    try:
+        file_path = Path(path)
 
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+        if create_dirs:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    file_path.write_text(content, encoding="utf-8")
+        with file_path.open("w", encoding="utf-8") as file:
+            file.write(content)
 
-    return f"File {file_path} written successfully."
+        return f"Successfully wrote {len(content)} characters to '{path}'"
+
+    except Exception as error:
+        return f"Error writing file: {error!s}"
 
 
 @tool
-def list_directory(path: str = ".") -> str:
-    """List files and directories in the given path."""
+def list_directory(
+    path: Annotated[str, "Directory path"] = ".",
+    *,
+    recursive: Annotated[bool, "Recursive"] = False,
+    include_gitignored: Annotated[bool, "Include ignored"] = False,
+) -> str:
+    """List files and directories while respecting .gitignore rules by default."""
+    try:
+        dir_path = Path(path).absolute()
 
-    directory = safe_path(path)
+        if not dir_path.exists():
+            return f"Error: Directory '{path}' does not exist"
 
-    if not directory.exists():
-        return f"Directory {directory} does not exist."
+        if not dir_path.is_dir():
+            return f"Error: '{path}' is not a directory"
 
-    if not directory.is_dir():
-        return f"Path {directory} is not a directory."
+        if not include_gitignored:
+            root_path, spec = _get_gitignore_spec(dir_path)
+        else:
+            root_path, spec = dir_path, None
 
-    entries = sorted(directory.iterdir())
+        all_paths = dir_path.rglob("*") if recursive else dir_path.iterdir()
 
-    if not entries:
-        return f"Directory {directory} is empty."
+        items = _collect_items(
+            all_paths,
+            dir_path,
+            root_path,
+            spec,
+        )
 
-    result = []
+        return _format_listing(items)
 
-    for entry in entries:
-        prefix = "[DIR]" if entry.is_dir() else "[FILE]"
-        result.append(f"{prefix[0]} {entry.name}")
-
-    return "\n".join(result)
+    except Exception as error:
+        return f"Error listing directory: {error!s}"
 
 
-TOOLS = [
+file_tools = [
     read_file,
     write_file,
     list_directory,
+]
+
+__all__ = [
+    "file_tools",
+    "list_directory",
+    "read_file",
+    "write_file",
 ]
