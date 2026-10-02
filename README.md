@@ -82,7 +82,7 @@ It is built for developers who want an AI agent that can work directly inside a 
 ### 1. Clone
 
 ```bash
-git clone https://github.com/DevDilip28/forgeai
+git clone https://github.com/DevDilip28/forgeai.git
 ```
 
 ### 2. Create environment
