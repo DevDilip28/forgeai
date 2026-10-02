@@ -1,5 +1,7 @@
-from langchain.messages import HumanMessage
 import rich_click as click
+
+from langchain_core.messages import HumanMessage
+
 from rich.console import Console
 from rich.panel import Panel
 
@@ -20,19 +22,19 @@ def chat():
 
     console.print(
         Panel(
-            "[bold]ForgeAI[/bold] - Autonomous AI Coding Agent\n\n",
-            title="Welcome to ForgeAI",
+            "[bold]ForgeAI[/bold]\n" "Autonomous AI Coding Agent",
+            title="Welcome",
         )
     )
 
     while True:
-        user_input = console.input("\n[bold cyan]ForgeAI> [/bold cyan]")
+        user_input = console.input("\n[bold cyan]ForgeAI> [/bold cyan]").strip()
 
         if not user_input:
             continue
 
         if user_input.lower() in {"exit", "quit"}:
-            console.print("\n[bold red]Exiting ForgeAI...[/bold red]")
+            console.print("[yellow]Exiting ForgeAI...[/yellow]")
             break
 
         try:
